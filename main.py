@@ -2,6 +2,7 @@ import time
 import socket
 from struct import unpack, pack
 import textwrap
+import platform
 
 TAB = '\t - '
 
@@ -21,14 +22,16 @@ class Pcap:
     def close(self):
         self.pcap_file.close()
 
+
 def hexify(data):
-    return format(data,'02x')
+    return format(data, '02x')
+
 
 def get_mac_addr(mac_raw):
-    #byte_str = map('{:02x}'.format(), mac_raw)
+    # byte_str = map('{:02x}'.format(), mac_raw)
     byte_str = map(hexify, mac_raw)
-    #byte_str=mac_raw
-    #[byte_str[i:i + 2] for i in range(0, len(byte_str), 2)]
+    # byte_str=mac_raw
+    # [byte_str[i:i + 2] for i in range(0, len(byte_str), 2)]
     mac_addr = ':'.join(byte_str).upper()
     return mac_addr
 
@@ -106,9 +109,38 @@ class HTTP:
             self.data = raw_data
 
 
+def getIP():
+    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        s.connect(('10.255.255.255', 1))
+        IP = s.getsockname()[0]
+    except:
+        IP = '127.0.0.1'
+    finally:
+        s.close()
+    return IP
+
+
+def make_connection():
+    if platform.system() == 'Windows':
+        # if windows:
+        conn = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_IP)
+        conn.bind((str(getIP()), 0))
+        conn.setsockopt(socket.IPPROTO_IP, socket.IP_HDRINCL, 1)
+        conn.ioctl(socket.SIO_RCVALL, socket.RCVALL_ON)
+
+    elif platform.system() == "Linux":
+        # if Linux
+        conn = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.ntohs(3))
+    else:
+        conn = socket.socket(socket.PF_PACKET, socket.SOCK_RAW, socket.ntohs(0x0800))
+    return conn
+
+
 def main():
     pcap = Pcap('capture.pcap')
-    conn = socket.socket(socket.AF_PACKET, socket.SOCK_RAW, socket.ntohs(3))
+
+    conn = make_connection()
     try:
         while True:
 
@@ -173,7 +205,7 @@ def main():
                                                                                                   udp.size))
 
                     if udp.src_port == 53 or udp.dest_port == 53:
-                        print ("DNS Data: ")
+                        print("DNS Data: ")
                         try:
                             http = HTTP(udp.data)
                             http_info = str(http.data).split('\n')
