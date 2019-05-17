@@ -83,15 +83,21 @@ class ICMP:
 class TCP:
 
     def __init__(self, raw_data):
-        (self.src_port, self.dest_port, self.sequence, self.acknowledgment, offset_reserved_flags) = unpack(
-            '! H H L L H', raw_data[:14])
-        offset = (offset_reserved_flags >> 12) * 4
-        self.flag_urg = (offset_reserved_flags & 32) >> 5
-        self.flag_ack = (offset_reserved_flags & 16) >> 4
-        self.flag_psh = (offset_reserved_flags & 8) >> 3
-        self.flag_rst = (offset_reserved_flags & 4) >> 2
-        self.flag_syn = (offset_reserved_flags & 2) >> 1
-        self.flag_fin = offset_reserved_flags & 1
+        (self.src_port, self.dest_port, self.sequence, self.acknowledgment, offset_flags, self.window_size,
+         self.checksum, self.urgentPointer) = unpack(
+            '! H H L L H H H H', raw_data[:20])
+        offset = (offset_flags >> 12) * 4
+
+        self.flag_ns = (offset_flags & 256) >> 8
+        self.flag_cwr = (offset_flags & 128) >> 7
+        self.flag_ece = (offset_flags & 64) >> 6
+        self.flag_urg = (offset_flags & 32) >> 5
+        self.flag_ack = (offset_flags & 16) >> 4
+        self.flag_psh = (offset_flags & 8) >> 3
+        self.flag_rst = (offset_flags & 4) >> 2
+        self.flag_syn = (offset_flags & 2) >> 1
+        self.flag_fin = offset_flags & 1
+        self.offset_flags = offset_flags
         self.data = raw_data[offset:]
 
 
@@ -106,7 +112,7 @@ class ARP:
 
     def __init__(self, raw_data):
         self.Hardware_Type, self.ProtoclType, self.HardwareAdressSize, self.ProtocolAddressSize, self.Operation, self.Sender_MAC, self.Sender_IP, self.dst_mac, self.dst_IP = unpack(
-            '2s 2s 1s 1s 2s 6s 4s 6s 4s', raw_data[:30])
+            '2s 2s 1s 1s 2s 6s 4s 6s 4s', raw_data[:28])
         self.data = raw_data[28:]
 
 
@@ -126,24 +132,15 @@ class RR:
 
 
 class DNS:
+
     def getRR(self, raw_data, count):
         last_j = 0
         rrs = [RR] * int(count)
         for i in range(int(count)):
             r = RR
-            j = 0
+
             Name = ""
-            a = raw_data[last_j + 1:]
-            for j in range(len(a)):
-                if raw_data[j + last_j + 1] == 0:
-                    break
 
-                if raw_data[j + last_j + 1] < 21:
-                    Name = Name + "."
-                else:
-                    Name = Name + chr(raw_data[j + last_j + 1])
-
-            last_j = j + last_j + 1
             dnsType, Class, ttl = unpack("! H H L", raw_data[last_j + 1:last_j + 9])
             Rdata_Length = raw_data[last_j + 5]
             Rdata = raw_data[last_j + 6:last_j + 6 + Rdata_Length]
@@ -157,6 +154,37 @@ class DNS:
             rrs[i] = r
 
         return rrs, last_j
+
+    def getName(self, dt):
+        len = dt[0]
+        Name = []
+        while len > 0:
+            Name.append(str(dt[1:len + 1].decode("ascii")))
+            dt = dt[len + 1:]
+            len = dt[0]
+        if dt[0] != 0:
+            return ""
+        return ".".join(Name), dt[1:]
+
+    def getRR_ans(self, dt, count, fullD):
+        rrs = [RR] * int(count)
+        for i in range(count):
+            r = RR
+            if len(dt)<12:
+                return rrs,dt
+            Name, dnsType, Class, ttl, Rdata_Length = unpack("! H H H L H", dt[:12])
+            Rdata = dt[13:13 + Rdata_Length]
+            dt = dt[13 + Rdata_Length:]
+            #r.Name, x = self.getName(fullD[Name & 0x3F:])
+            r.Name=""
+            r.Class = Class
+            r.Type = dnsType
+            r.TTL = ttl
+            r.Rdata_Length = Rdata_Length
+            r.Rdata = Rdata
+            rrs[i] = r
+
+        return rrs, dt
 
     def __init__(self, raw_data):
         self.indentification, self.control, self.Question_count, self.Answer_count, self.totalAuthority_RR, self.TotalAditional_RR = unpack(
@@ -195,63 +223,119 @@ class DNS:
 
         # questions
         last_j = 12
+        dt = raw_data[last_j:]
+
         questions = [DnsQuery] * int(self.Question_count)
         for i in range(int(self.Question_count)):
             d = DnsQuery
-            j = 0
-
-            Name = ""
-            for j in range(len(raw_data[last_j + 1:])):
-                if raw_data[j + last_j + 1] == 0:
-                    break
-
-                if raw_data[j + last_j + 1] < 21:
-                    Name = Name + "."
-                else:
-                    Name = Name + chr(raw_data[j + last_j + 1])
-
-            # Name = str(raw_data[last_j + 1:j + last_j + 1])
-            last_j = j + last_j + 1
-            dnsType = raw_data[last_j + 1]
-            questionClass = raw_data[last_j + 2]
-            last_j += 2
+            len = dt[0]
+            Name = []
+            while len > 0:
+                Name.append(str(dt[1:len + 1].decode("ascii")))
+                dt = dt[len + 1:]
+                len = dt[0]
+            Name = ".".join(Name)
+            if dt[0] != 0:
+                continue
+            dnsType, questionClass = unpack('H H', dt[1:4 + 1])
+            dt = dt[5:]
             d.Query_Name = Name
             d.Class = questionClass
             d.Type = dnsType
             questions[i] = d
 
-            # d.Query_Name = unpack("! 4S 2s 2s", raw_data[12 + i, j])
+        answers, dt = self.getRR_ans(dt, self.Answer_count, raw_data)
 
-        answers, last_j = self.getRR(raw_data[last_j + 1:], self.Answer_count)
-        authorities, lastj = self.getRR(raw_data[last_j + 1:], self.totalAuthority_RR)
-        additionalRRs, last_j = self.getRR(raw_data[last_j + 1:], self.TotalAditional_RR)
+        authorities, dt = self.getRR_ans(dt, self.totalAuthority_RR,raw_data)
+
+        additionalRRs, dt = self.getRR_ans(dt, self.TotalAditional_RR,raw_data)
+
+        self.answersRRs = answers
+        self.aditionalRRs = additionalRRs=[]
+        self.authorityRRs = authorities=[]
+        self.questions = questions
+
+        """
+
+        Name = ""
+        for j in range(len(raw_data[last_j + 1:])):
+            if raw_data[j + last_j + 1] == 0:
+                break
+
+            if raw_data[j + last_j + 1] < 21:
+                Name = Name + "."
+            else:
+                Name = Name + chr(raw_data[j + last_j + 1])
+
+        # Name = str(raw_data[last_j + 1:j + last_j + 1])
+        last_j = j + last_j + 1
+        
+        dnsType = raw_data[last_j + 1]
+        questionClass = raw_data[last_j + 2]
+        last_j += 2
+        d.Query_Name = Name
+        d.Class = questionClass
+        d.Type = dnsType
+        questions[i] = d
+
+            # d.Query_Name = unpack("! 4S 2s 2s", raw_data[12 + i, j])
+        if self.Answer_count > 0:
+            answers, last_j = self.getRR(raw_data[last_j + 1:], self.Answer_count)
+        if self.totalAuthority_RR:
+            authorities, lastj = self.getRR(raw_data[last_j + 1:], self.totalAuthority_RR)
+        if self.totalAuthority_RR:
+            additionalRRs, last_j = self.getRR(raw_data[last_j + 1:], self.TotalAditional_RR)
 
         self.answersRRs = answers
         self.aditionalRRs = additionalRRs
         self.authorityRRs = authorities
         self.questions = questions
-
+        self.data = raw_data[last_j + 1:]
+"""
         """
         self.QR, self.Opcode, self.AA, self.TC, self.RD, self.RA, self.z, self.AD, self.CD, self.Rcode = unpack(
             "! 1 3 1 1 1 1 1 1 1 3", self.control)
         """
-
-        self.data = raw_data[last_j + 1:]
+        self.data = dt
 
 
 class HTTP:
 
     def __init__(self, raw_data):
-        try:
-            self.data = raw_data.decode('utf-8')
-        except:
-            self.data = raw_data
+        texed = ""
+        tmp = raw_data
+        self.final_out = ""
+        while True:
+            ind = raw_data.find("\r\n".encode())
+            if ind < 0:
+                if len(texed):
+                    self.final_out = self.final_out + "\n" + str(texed)
+                    print(texed)
+                if len(raw_data):
+                    self.final_out = self.final_out + "\n" + raw_data
+                    print(raw_data)
+                return
+            else:
+                try:
+                    texed = str(texed) + raw_data[:ind + 2].decode()
+                except:
+                    self.final_out = self.final_out + "\n" + tmp
+                    print(tmp)
+                    return
+                raw_data = raw_data[ind + 2:]
 
 
 class FTP:
 
     def __init__(self, raw_data):
+        deliminator = "\r\n"
         try:
+            ind = raw_data.find(deliminator.encode())
+            if ind < 0:
+                self.data = raw_data
+            else:
+                self.data = raw_data[:ind + 2].decode(), raw_data[ind + 2:]
+
             self.data = raw_data.decode('ascii')
         except:
             self.data = raw_data
@@ -289,7 +373,8 @@ def main():
     pcap = Pcap('captured.pcap')
 
     conn = make_connection()
-    try:
+    # try:
+    if 1:
         while True:
 
             raw_data, addr = conn.recvfrom(65535)
@@ -305,11 +390,24 @@ def main():
             if eth.proto == 1544 or eth.proto == '\x08\x06':
                 arp = ARP(eth.data)
                 print("ARP_HEADER")
-                print("Hardware type:   ", binascii.hexlify(arp.Hardware_Type))
-                print("Protocol type:   ", binascii.hexlify(arp.ProtoclType))
+                print("Hardware type:   ", binascii.hexlify(arp.Hardware_Type), end="")
+                if arp.Hardware_Type == 1:
+                    print("(Ethernet)")
+                else:
+                    print("")
+
+                print("Protocol type:   ", binascii.hexlify(arp.ProtoclType), end="")
+                if arp.ProtoclType == 2048:
+                    print("(IP)")
+                else:
+                    print("")
                 print("Hardware size:   ", binascii.hexlify(arp.HardwareAdressSize))
                 print("Protocol size:   ", binascii.hexlify(arp.ProtoclType))
-                print("Opcode:          ", binascii.hexlify(arp.Operation))
+                print("Opcode:          ", binascii.hexlify(arp.Operation), end="")
+                if arp.Operation == 1:
+                    print("(request)")
+                else:
+                    print("(reply)")
                 print("Source MAC:      ", binascii.hexlify(arp.Sender_MAC))
                 print("Source IP:      ", binascii.hexlify(arp.Sender_IP))
                 print("Dest MAC:      ", binascii.hexlify(arp.dst_mac))
@@ -321,15 +419,17 @@ def main():
             if eth.proto == 8:
                 ipv4 = IPv4(eth.data)
                 print('\t - ' + 'IPv4 Packet:')
-                print("\t" + '\t - ' + 'Version: {}, Header Length: {}, TTL: {},'.format(ipv4.version, ipv4.header_length,
-                                                                                     ipv4.ttl))
+                print(
+                    "\t" + '\t - ' + 'Version: {}, Header Length: {}, TTL: {},'.format(ipv4.version, ipv4.header_length,
+                                                                                       ipv4.ttl))
                 print("\t" + '\t - ' + 'Protocol: {}, Source: {}, Target: {}'.format(ipv4.proto, ipv4.src, ipv4.target))
 
                 # ICMP Protocol
                 if ipv4.proto == 1:
                     icmp = ICMP(ipv4.data)
                     print('\t - ' + 'ICMP Packet:')
-                    print("\t" + '\t - ' + 'Type: {}, Code: {}, Checksum: {},'.format(icmp.type, icmp.code, icmp.checksum))
+                    print("\t" + '\t - ' + 'Type: {}, Code: {}, Checksum: {},'.format(icmp.type, icmp.code,
+                                                                                      icmp.checksum))
                     if icmp.type == 0:
                         print("Echo Reply")
                     elif icmp.type == 3:
@@ -390,10 +490,18 @@ def main():
                     tcp = TCP(ipv4.data)
                     print('\t - ' + 'TCP Segment:')
                     print("\t" + '\t - ' + 'Source Port: {}, Destination Port: {}'.format(tcp.src_port, tcp.dest_port))
-                    print("\t" + '\t - ' + 'Sequence: {}, Acknowledgment: {}'.format(tcp.sequence, tcp.acknowledgment))
-                    print("\t" + '\t - ' + 'Flags:')
-                    print("\t\t" + '\t - ' + 'URG: {}, ACK: {}, PSH: {}'.format(tcp.flag_urg, tcp.flag_ack, tcp.flag_psh))
-                    print("\t\t" + '\t - ' + 'RST: {}, SYN: {}, FIN:{}'.format(tcp.flag_rst, tcp.flag_syn, tcp.flag_fin))
+                    print("\t" + '\t - ' + 'Sequence: {}, Acknowledgment: {}'.format(str(tcp.sequence),
+                                                                                     str(tcp.acknowledgment)))
+                    print("\t" + '\t - ' + 'Flags: ' + str(tcp.offset_flags))
+
+                    print(
+                        "\t\t" + '\t - ' + 'URG: {}, ACK: {}, PSH: {}'.format(tcp.flag_urg, tcp.flag_ack, tcp.flag_psh))
+                    print(
+                        "\t\t" + '\t - ' + 'RST: {}, SYN: {}, FIN:{}'.format(tcp.flag_rst, tcp.flag_syn, tcp.flag_fin))
+
+                    print("Window Size: {} , CheckSum: {} , Urgent Pointer : {}".format(str(tcp.window_size),
+                                                                                        str(tcp.checksum),
+                                                                                        str(tcp.urgentPointer)))
 
                     if len(tcp.data) > 0:
 
@@ -405,16 +513,16 @@ def main():
                                 http_info = str(http.data).split('\n')
                                 for line in http_info:
                                     print("\t\t\t   " + str(line))
+                                # print(http)
                             except:
                                 print(format_multi_line("\t\t\t   ", tcp.data))
-                        elif tcp.src_port == 27 or tcp.src_port == 28 or tcp.dest_port == 27 or tcp.dest_port == 28:
+                        # FTP
+                        elif tcp.src_port == 20 or tcp.src_port == 21 or tcp.dest_port == 20 or tcp.dest_port == 21:
 
                             print("\t" + '\t - ' + 'FTP Data:')
                         try:
                             ftp = FTP(tcp.data)
-                            ftp_info = str(ftp.data).split('\n')
-                            for line in ftp_info:
-                                print("\t\t\t   " + str(line))
+                            print(ftp.data)
                         except:
                             print(format_multi_line("\t\t\t   ", tcp.data))
                         else:
@@ -428,12 +536,13 @@ def main():
                     udp = UDP(ipv4.data)
                     print('\t - ' + 'UDP Segment:')
                     print("\t" + '\t - ' + 'Source Port: {}, Destination Port: {}, Length: {}'.format(udp.src_port,
-                                                                                                  udp.dest_port,
-                                                                                                  udp.size))
+                                                                                                      udp.dest_port,
+                                                                                                      udp.size))
                     # DNS Protocol
                     if udp.src_port == 53 or udp.dest_port == 53:
                         print("DNS Data: ")
-                        try:
+                        # try:
+                        if 1:
                             dns = DNS(udp.data)
                             print("Identification: {} ,Control: {}".format(dns.indentification, dns.control))
                             if dns.QR:
@@ -471,8 +580,8 @@ def main():
                                 print(q.Name)
                             # print(dns.aditionalRRs)
                             print("___________________________________")
-                        except:
-                            print(format_multi_line("\t\t\t   ", udp.data))
+                        # except:
+                        #    print(format_multi_line("\t\t\t   ", udp.data))
                     else:
                         print("UDP data:")
                         print(udp.data)
@@ -485,9 +594,9 @@ def main():
             else:
                 print('Ethernet Data:')
                 print(format_multi_line("\t   ", eth.data))
-    except:
-        pass
-    finally:
+        # except:
+        #    pass
+        # finally:
         pcap.close()
 
 
