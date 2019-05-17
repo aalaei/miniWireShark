@@ -1,7 +1,12 @@
 # miniWireShark
 packet sniffer(cross platform)
 
+
+
 This is done only for educational Purposes!
+
+#supported protocols:
+HTTP, TCP, UDP, ICMP, DNS, ARP, FTP
 
 program is able to run on windows, Linux, Mac.
 

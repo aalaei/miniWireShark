@@ -131,6 +131,17 @@ class RR:
     Rdata = []
 
 
+class RR_aditional:
+    Name = ""
+    Type = 0
+    UdpPayloadSize = 0
+    Rcode = 0
+    version = 0
+    Z = 0
+    data_Length = 0
+    data = []
+
+
 class DNS:
 
     def getRR(self, raw_data, count):
@@ -170,24 +181,51 @@ class DNS:
         rrs = [RR] * int(count)
         for i in range(count):
             r = RR
-            if len(dt)<12:
-                return rrs,dt
-            Name, dnsType, Class, ttl, Rdata_Length = unpack("! H H H L H", dt[:12])
-            Rdata = dt[13:13 + Rdata_Length]
-            dt = dt[13 + Rdata_Length:]
-            #r.Name, x = self.getName(fullD[Name & 0x3F:])
-            r.Name=""
+            if len(dt) < 12:
+                return rrs, dt
+            if dt[0] != 0:
+                Name, dnsType, Class, ttl, Rdata_Length = unpack("! H H H L H", dt[:12])
+                Rdata = dt[12:12 + Rdata_Length]
+                dt = dt[12 + Rdata_Length:]
+            else:
+                Name, dnsType, Class, ttl, Rdata_Length = unpack("! B H H L H", dt[:11])
+                Rdata = dt[11:11 + Rdata_Length]
+                dt = dt[11 + Rdata_Length:]
+
+            r.Name, x = self.getName(fullD[Name & 0x3F:])
             r.Class = Class
             r.Type = dnsType
             r.TTL = ttl
             r.Rdata_Length = Rdata_Length
-            r.Rdata = Rdata
+            r.Rdata = (Rdata)
             rrs[i] = r
 
         return rrs, dt
 
+    def getRR_adition(self, dt, count):
+        rrs = [RR_aditional] * int(count)
+        for i in range(count):
+            r = RR_aditional
+            if len(dt) < 11:
+                return rrs, dt
+            Name, dnsType, UDP_payload, RCode, version, Z, data_Length = unpack("! B H H B B H H", dt[:11])
+            data = dt[11:11 + data_Length]
+            dt = dt[11 + data_Length:]
+            r.Name = Name
+
+            r.Type = dnsType
+            r.UdpPayloadSize = UDP_payload
+            r.Rcode = RCode
+            r.version = version
+            r.Z = Z
+
+            r.data_Length = data_Length
+            r.data = toIpv4(data)
+            rrs[i] = r
+        return rrs, dt
+
     def __init__(self, raw_data):
-        self.indentification, self.control, self.Question_count, self.Answer_count, self.totalAuthority_RR, self.TotalAditional_RR = unpack(
+        self.identification, self.control, self.Question_count, self.Answer_count, self.totalAuthority_RR, self.TotalAditional_RR = unpack(
             "! H H H H H H", raw_data[:12])
         ctl = self.control
 
@@ -246,13 +284,15 @@ class DNS:
 
         answers, dt = self.getRR_ans(dt, self.Answer_count, raw_data)
 
-        authorities, dt = self.getRR_ans(dt, self.totalAuthority_RR,raw_data)
+        if (self.totalAuthority_RR > 0):
+            a = 1
+        authorities, dt = self.getRR_ans(dt, self.totalAuthority_RR, raw_data)
 
-        additionalRRs, dt = self.getRR_ans(dt, self.TotalAditional_RR,raw_data)
+        additionalRRs, dt = self.getRR_adition(dt, self.TotalAditional_RR)
 
         self.answersRRs = answers
-        self.aditionalRRs = additionalRRs=[]
-        self.authorityRRs = authorities=[]
+        self.aditionalRRs = additionalRRs
+        self.authorityRRs = authorities
         self.questions = questions
 
         """
@@ -370,7 +410,7 @@ def make_connection():
 
 
 def main():
-    pcap = Pcap('captured.pcap')
+    pcap = Pcap('dump.pcap')
 
     conn = make_connection()
     # try:
@@ -544,7 +584,7 @@ def main():
                         # try:
                         if 1:
                             dns = DNS(udp.data)
-                            print("Identification: {} ,Control: {}".format(dns.indentification, dns.control))
+                            print("Identification: {} ,Control: {}".format(dns.identification, dns.control))
                             if dns.QR:
                                 print("Response")
                             else:
@@ -554,30 +594,38 @@ def main():
                             print("num of Answers:{}".format(dns.Answer_count))
                             print("num of Authorities:{}".format(dns.totalAuthority_RR))
                             print("num of Additional RRs :{}".format(dns.TotalAditional_RR))
-                            print("Questions: ")
                             print("------------------------")
+                            print("Questions: ")
                             qs = dns.questions
                             for q in qs:
-                                print(q.Query_Name)
+                                print("Name: {},CLASS: {},type: {}".format(q.Query_Name, q.Class, q.Type))
 
                             # print(dns.questions)
-                            print("Answers:")
                             print("------------------------")
+                            print("Answers:")
+
                             qs = dns.answersRRs
                             for q in qs:
-                                print(q.Name)
+                                print("CLASS: {}, name: {},type: {} ,TTL: {} , data: {}".format(q.Class, q.Name, q.Type,
+                                                                                                q.TTL, q.Rdata))
 
                             # print(dns.answersRRs)
-                            print("Authorities:")
                             print("------------------------")
+                            print("Authorities:")
+
                             qs = dns.authorityRRs
                             for q in qs:
-                                print(q.Name)
+                                print("CLASS: {}, name: {},type: {} ,TTL: {} , data: {}".format(q.Class, q.Name, q.Type,
+                                                                                                q.TTL, q.Rdata))
                             # print(dns.authorityRRs)
+                            print("------------------------")
                             print("Additional")
                             qs = dns.aditionalRRs
                             for q in qs:
                                 print(q.Name)
+                                print("version: {}, name: {},type: {} , data: {}".format(q.version, q.Name, q.Type,
+                                                                                         q.data))
+
                             # print(dns.aditionalRRs)
                             print("___________________________________")
                         # except:
