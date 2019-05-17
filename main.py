@@ -5,6 +5,15 @@ import textwrap
 import platform
 import binascii
 
+"""
+    Sayed Ali Alaei Tabatabaei
+    student No: 9530403
+    This is also available on my github
+    
+    https://github.com/aalaei/miniWireShark.git
+    
+"""
+
 
 class Pcap:
 
@@ -284,8 +293,6 @@ class DNS:
 
         answers, dt = self.getRR_ans(dt, self.Answer_count, raw_data)
 
-        if (self.totalAuthority_RR > 0):
-            a = 1
         authorities, dt = self.getRR_ans(dt, self.totalAuthority_RR, raw_data)
 
         additionalRRs, dt = self.getRR_adition(dt, self.TotalAditional_RR)
@@ -413,8 +420,8 @@ def main():
     pcap = Pcap('dump.pcap')
 
     conn = make_connection()
-    # try:
-    if 1:
+    try:
+
         while True:
 
             raw_data, addr = conn.recvfrom(65535)
@@ -642,9 +649,10 @@ def main():
             else:
                 print('Ethernet Data:')
                 print(format_multi_line("\t   ", eth.data))
-        # except:
-        #    pass
-        # finally:
+
+    except:
+        pass
+    finally:
         pcap.close()
 
 
